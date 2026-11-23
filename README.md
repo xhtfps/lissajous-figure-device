@@ -1,6 +1,41 @@
-# 2026 电赛 F 题：李萨如图形显示控制装置
+<div align="center">
 
-2026 年全国大学生电子设计竞赛 F 题作品：用 STM32F407 合成正交双通道信号驱动 XY 显示，把两路正弦相位差映射为屏幕上的李萨如图形，并由 K230 做参数识别与反馈控制。
+# 2026 电赛 F 题 · 李萨如图形显示控制装置
+
+**两路同源正弦 + 一块 K230：把「相位差」变成屏幕上的直线、圆和椭圆**
+
+![platform](https://img.shields.io/badge/platform-STM32F407ZGT6%20%2B%20K230-0b5cad?style=flat-square)
+![toolchain](https://img.shields.io/badge/toolchain-Keil%20MDK%205.36%2B-1f6feb?style=flat-square)
+![license](https://img.shields.io/badge/license-see%20LICENSE-lightgrey?style=flat-square)
+![last commit](https://img.shields.io/github/last-commit/xhtfps/lissajous-figure-device?style=flat-square)
+
+[快速开始](#3-快速开始与关键实现) · [常见问题](#4-常见问题) · [全部仓库索引](https://github.com/xhtfps/xhtfps)
+
+</div>
+
+## 为什么要做视觉闭环
+
+只靠开环 DAC 输出，图形「看起来对」但没法证明相位到底准不准。这里用 K230 对着屏幕采集、反解相位差再回传，形成**输出—观测—修正**的闭环，赛题要求的「显示控制」才成立。
+
+## 亮点
+
+- **同源同触发**：双 DAC 由同一个 TIM 触发，从根上消除相位漂移这个最常见故障。
+- **相位→图形关系写清楚**：0° 直线、90° 圆、其余椭圆，答辩时不用现推。
+- **幅值查表校准**：两路增益不一致会把圆压成椭圆，用同一标准源分别标定后按表补偿。
+- **题、码、调研分开放**：`2026F题_网上调研/` 只放方案调研，工程目录只放实现。
+
+## 结构
+
+```mermaid
+flowchart LR
+  TIM["同一 TIM 触发"] --> D1["DAC CH1 → X"]
+  TIM --> D2["DAC CH2 → Y"]
+  D1 --> XY["XY 显示<br/>李萨如图形"]
+  D2 --> XY
+  XY --> CAM["K230 摄像头采集"]
+  CAM --> REC["相位差 / 椭圆度识别"]
+  REC -->|"回传"| CTRL["STM32 相位 / 幅值修正"]
+```
 
 ## 1. 目录一览
 
@@ -41,3 +76,19 @@
 - 编译产物不入库，排除明细见 [`EXCLUDED_FILES.md`](EXCLUDED_FILES.md)。
 - 赛题原文与调研资料版权归原作者，仅作参赛学习。
 - 本仓库与 `electronics-competition` 的分工：本仓库是 F 题单一项目的完整工程，后者是历年电赛资料汇总。
+## 路线图
+
+- [x] 双通道同源触发与相位/幅值控制跑通
+- [x] K230 侧识别脚本与赛题调研入库
+- [ ] 补相位精度实测数据（不同频率点的误差表）
+- [ ] 把识别回传改成闭环自动校正演示
+
+## 参与与反馈
+
+- 遇到问题请走 [Issue 模板](.github/ISSUE_TEMPLATE)，注明输出频率与观察到的图形。
+- 提 PR 前先读 [CONTRIBUTING.md](CONTRIBUTING.md)；安全问题按 [SECURITY.md](SECURITY.md) 私下反馈。
+- 如果这个仓库帮你省过时间，点个 ⭐ 是最省事的支持。
+
+## 许可证
+
+本仓自写代码见 [LICENSE](LICENSE)；赛题原文、调研资料与第三方库版权归原作者，仅作参赛学习。
