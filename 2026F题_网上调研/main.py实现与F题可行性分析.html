@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>main.py 实现分析与 F 题可行性评估</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+:root{--bg:#0f1420;--panel:#1a2233;--panel2:#202b40;--line:#2c3a52;--txt:#dbe4f0;--dim:#8aa0bc;--acc:#4ea1ff;--ok:#37d67a;--warn:#ffb84d;--bad:#ff6b6b}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--txt);font-family:"Microsoft YaHei",Segoe UI,sans-serif;line-height:1.65;padding:28px 24px}
+h1{font-size:24px;margin-bottom:6px}
+h2{font-size:18px;margin:26px 0 10px;padding-left:10px;border-left:4px solid var(--acc)}
+h3{font-size:15px;margin:16px 0 8px;color:var(--acc)}
+p{color:var(--dim);font-size:14px;margin-bottom:10px}
+.sub{color:var(--dim);font-size:13px;margin-bottom:22px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin-bottom:18px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{background:var(--panel2);color:var(--acc);padding:8px;text-align:left;border-bottom:2px solid var(--line)}
+td{padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+td.k{color:var(--dim);white-space:nowrap}
+.badge{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;font-weight:600}
+.b-ok{background:rgba(55,214,122,.15);color:var(--ok)}
+.b-warn{background:rgba(255,184,77,.15);color:var(--warn)}
+.b-bad{background:rgba(255,107,107,.15);color:var(--bad)}
+.b-info{background:rgba(78,161,255,.15);color:var(--acc)}
+code{background:var(--panel2);padding:1px 6px;border-radius:4px;font-size:12.5px;color:#9ecbff}
+.chart{width:100%;height:340px}
+.caption{color:var(--dim);font-size:12.5px;margin-top:4px}
+ul{margin:6px 0 6px 18px;color:var(--dim);font-size:13.5px}
+li{margin-bottom:5px}
+li b{color:var(--txt)}
+.tag{font-size:12px;color:var(--dim)}
+@media(max-width:900px){.grid2,.grid3{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<h1>K230 main.py 实现分析与 F 题可行性评估</h1>
+<p class="sub">基于 <code>lissajous_vision_k230/main.py</code>（3373 行，commit 837a075）与《F题_李萨如图形显示控制装置.pdf》逐条对照 · 2026-10-22</p>
+
+<div class="panel">
+<h3>F 题评分项 ↔ 实现模块映射</h3>
+<table>
+<tr><th>要求</th><th>分值</th><th>实现位置（main.py / F407）</th><th>关键机制</th></tr>
+<tr><td class="k">1 直通：8×8div 对角线</td><td>5</td><td>F407 直通模式；K230 shape=1 判型</td><td><code>diagonal_shape_metrics</code>（PCA/TLS 直线度，eigen_ratio≤0.03）</td></tr>
+<tr><td class="k">2 相位正交·幅度相等：8div 圆</td><td>15</td><td>K230 <code>PHASE_FINE</code> + <code>AMPLITUDE_FINE</code></td><td>相位粗扫 30°→细扫 5°找 pass；<code>circle_shape_metrics</code> 径向 CV≤0.06</td></tr>
+<tr><td class="k">3 输出 2 倍频：∞ 形</td><td>25</td><td>K230 RAMP 估频 ratio×2 + 相位 + 幅度</td><td><code>infinity_shape_metrics</code> 镜像对称 IoU≥0.90 + 中心穿越</td></tr>
+<tr><td class="k">4 幅度 2/4/6/8div</td><td>15</td><td><code>amplitude_feedforward</code> 表 + 幅度闭环</td><td>118mV→3.6V 标定（K=30.5），插值缩放，闭环纠 ≤0.2div</td></tr>
+<tr><td class="k">5 断耦合·摄像头闭环·≤10s·≥5s</td><td>40</td><td>K230 全套（本报告主体）</td><td>RAMP 估频 + 旋转锁频 + 相位/幅度闭环 + HOLD</td></tr>
+<tr><td class="k">6 设计报告</td><td>20</td><td>—</td><td>本文档即素材之一</td></tr>
+</table>
+</div>
+
+<div class="panel">
+<h3>系统架构（要求 5 合规链路）</h3>
+<div id="arch" class="chart"></div>
+<p class="caption">合规要点：信号源只接示波器 X 轴 + 装置输入；要求 5 断开装置输入后，信号源频率不得传入/预设——K230 测频 100% 来自摄像头对屏幕的观察。</p>
+</div>
+
+<div class="panel">
+<h3>状态机（Requirement5Controller，9 状态 + FAILED 兜底）</h3>
+<div id="sm" class="chart"></div>
+<p class="caption">新主流程：START 不发占位 SET → MEASURE_X 收敛 → 必发 $RAMP → 估频后直接精确 $SET → 旋转锁频 → 相位 → 幅度 → HOLD(5s) → DONE。任何斜坡失败一律 FAILED（$FAILED），不回退 v2 扫频。</p>
+</div>
+
+<div class="panel">
+<h3>图像分析流水线（每帧）</h3>
+<div id="pipe" class="chart"></div>
+<p class="caption">性能优化：C 层 find_blobs 预筛（满格包络直接跳过）、mask memoryview 读缓冲、YOLO 隔 2 帧推理 + 锁定后 20 帧复查、显示隔帧。实测 fps≈30~33，推理 29ms，测量 11ms。</p>
+</div>
+
+<div class="panel">
+<h3>RAMP 斜坡测频原理（v3 核心）</h3>
+<div class="grid2">
+<div>
+<ul>
+<li><b>原理</b>：F407 切 PA4 DAC 出 1kHz 锯齿（T=1ms）作示波器 Y 轴 → X-Y 显示把输入正弦沿 Y 展开成 <code>x(u)=A·sin(2π·N·u)</code>，<b>N=fx·T_ramp</b></li>
+<li><b>估频</b>：行质心（<code>ramp_row_centroids</code>）→ 整数周期 DFT 粗估（<code>_ramp_dft_power</code>）→ 黄金分割扫 N 最小化 4 元 LSQ 拟合残差（<code>_ramp_fit_error</code>，sin/cos/直流/线性 4 项）</li>
+<li><b>归整</b>：<code>fx=N×1000 → round(fx/100) 网格 → ratio×（shape=3 时×2）→ 精确 $SET</code></li>
+<li><b>数学验证</b>：合成 N=12.3 正弦轨迹 → 估计 12.300、质量 0.995（<code>test_ramp_estimate_math</code> 已过）</li>
+<li><b>失败语义</b>：无轨迹 5 帧/档 → 换档 ×3 → FAILED；N 越界 → 换档 ×3 → FAILED；F407 拒绝/ACK 超时 → FAILED</li>
+</ul>
+</div>
+<div>
+<h3>5 项关键常量</h3>
+<table>
+<tr><td class="k">RAMP_SAW_HZ</td><td>1000 Hz（T=1ms）</td></tr>
+<tr><td class="k">RAMP_AMP_MV</td><td>3300 mV（DAC 满幅）</td></tr>
+<tr><td class="k">RAMP_MIN/MAX_CYCLES</td><td>4 / 60（→ 覆盖 4k~60kHz 直接命中）</td></tr>
+<tr><td class="k">RAMP_GRID_ROUND</td><td>100 Hz 网格（与题目步进一致）</td></tr>
+<tr><td class="k">CONTROL_TIMEOUT_MS</td><td>10000（硬超时）</td></tr>
+<tr><td class="k">HOLD_REQUIRED_MS</td><td>5000</td></tr>
+</table>
+<p class="tag">越界换档逻辑：N&lt;4 → 斜坡减半（窗口内周期变多）；N&gt;60 → 斜坡加倍。1kHz→2k→4k→8k 覆盖全频段。</p>
+</div>
+</div>
+</div>
+
+<div class="panel">
+<h3>10s 控制预算时间线（估算）</h3>
+<div id="timeline" class="chart"></div>
+<p class="caption">HOLD 5s 占硬性下限；前段 ≈3.5s 弹性。最坏路径（相位粗扫 12 档 × 0.2s ≈ 2.4s）时总时长 ≈8.6s，贴近但不破 10s 红线——这是风险集中点。</p>
+</div>
+
+<div class="panel">
+<h3>可行性矩阵</h3>
+<table>
+<tr><th>维度</th><th>状态</th><th>证据 / 差距</th></tr>
+<tr><td class="k">状态机正确性</td><td><span class="badge b-ok">已实证</span></td><td>10 项冒烟测试全过：主流程 + 5 条失败路径（无轨迹/越界/F407拒绝/ACK超时/禁用）</td></tr>
+<tr><td class="k">估频数学</td><td><span class="badge b-ok">已实证</span></td><td>合成 N=12.3 估计 12.300，质量 0.995；DFT+LSQ 组合对整数周期鲁棒</td></tr>
+<tr><td class="k">帧率性能</td><td><span class="badge b-ok">已实证</span></td><td>实机日志 fps 30~33、推理 29ms、测量 11ms，远低于 100ms 预算</td></tr>
+<tr><td class="k">F407 协议/DAC</td><td><span class="badge b-ok">已实证</span></td><td>$RAMP 解析、DAC 锯齿（125 级阶梯=精确 1kHz 0% 误差）编译 0E/0W；进菜单 3 启动即出锯齿</td></tr>
+<tr><td class="k">实机估频精度</td><td><span class="badge b-warn">待台架验证</span></td><td>合成误差 0.15 周期→150Hz（N=50 时），100Hz 网格容差 ±50Hz；真实余辉/摩尔纹/DAC 建立时间未测。需实测确认归整命中率</td></tr>
+<tr><td class="k">ROI/网格标定</td><td><span class="badge b-warn">真机必调</span></td><td>GRID_RECT=(44,12,228,287) 由 640×480 标定外推，代码 FIXME 注明必须用绿色叠加层重核；像素→div 全链路依赖它</td></tr>
+<tr><td class="k">DDS 幅度表</td><td><span class="badge b-warn">已重标待复验</span></td><td>118mV→3.6V（K=30.5）菜单4 实测；不同频点衰减平坦性需复测（≤0.2div=±2.5%）</td></tr>
+<tr><td class="k">10s 预算余量</td><td><span class="badge b-warn">临界</span></td><td>相位粗扫最坏 +2.4s；RAMP 估频失败换档 ×3 各 +0.3s。总 ~8.6s，需实测收紧 settle</td></tr>
+<tr><td class="k">声光提示</td><td><span class="badge b-warn">接线待确认</span></td><td>F407 完成态拉 PG10；板上无蜂鸣器驱动，需确认外接声光电路含声音</td></tr>
+<tr><td class="k">计时起点</td><td><span class="badge b-warn">规则待核对</span></td><td>题目"从改变信号源频率后计时" vs 实际按键→$START 时序，需实测流程核对</td></tr>
+<tr><td class="k">合规（无频率预设）</td><td><span class="badge b-ok">已满足</span></td><td>$START 的 freq 仅记录装置自身输出（非信号源）；测频全摄像头观察；无占位 SET</td></tr>
+</table>
+</div>
+
+<div class="panel">
+<h3>风险 TOP 3 与对策</h3>
+<div class="grid3">
+<div>
+<h3>① 估频归整错档</h3>
+<p>余辉/摩尔纹导致 N 误差 &gt;0.5 周期 → 归错 100Hz 档。对策：台架用 1k~100kHz 步进 100Hz 全扫实测命中率；命中率 &lt;95% 时改用「RAMP 估频 + ±12 档细扫确认」混合策略（代码保留 RAMP_LOCAL_SWEEP_RANGE_GRID=12 常量可立即启用）。</p>
+</div>
+<div>
+<h3>② 10s 超时</h3>
+<p>最坏相位粗扫 12 档。对策：实测各档 settle 后压缩 POST_APPLIED_SETTLE_MS（现 80ms）；相位先粗扫一次锁定象限再细扫；必要时 HOLD 首帧即发 $LOCKED 提前上报。超时已设硬断（ERROR_CONTROL_TIMEOUT）。</p>
+</div>
+<div>
+<h3>③ 幅度误差超 0.2div</h3>
+<p>不同频率点 DDS 平坦性。对策：台架 6 频点×4 档复测幅度表；AMPLITUDE_FINE 闭环已能收敛（误差=+0.00 实测日志），确认收敛后发 $LOCKED 前再等 1 帧稳定即可。</p>
+</div>
+</div>
+</div>
+
+<div class="panel">
+<h3>结论</h3>
+<p><b>代码层面</b>：main.py 已把要求 5 的闭环走通——合规断耦合、纯摄像头测频、RAMP 粗测频 + 旋转精锁 + 相位/幅度闭环 + 5s 稳定、10s 硬超时、fail-fast 失败语义。数学、状态机、性能三类验证已过，F407 协议与 DAC 输出已编译就绪。</p>
+<p><b>实机层面</b>：可运行性成立，但「估频命中率」「ROI 重标定」「幅度平坦性」三个真机标定项未闭环。按分步台架清单推进（锯齿波形验证 → XY 展开 → 估频命中率全频扫描 → 切 9959 精锁 → 幅度表复测），每步以实测数据回填，10s 预算与 0.2div 幅度误差才有硬保证。</p>
+</div>
+
+<script>
+const D=echarts.init(document.getElementById('arch'),null,{renderer:'canvas'});
+D.setOption({
+ backgroundColor:'transparent',
+ tooltip:{},
+ series:[{
+  type:'graph', layout:'force', roam:false, draggable:true,
+  force:{repulsion:420,edgeLength:130},
+  label:{show:true,fontSize:12,color:'#dbe4f0',formatter:p=>p.name},
+  lineStyle:{color:'#4ea1ff',width:1.6,opacity:.75,curveness:.15},
+  emphasis:{focus:'adjacency'},
+  data:[
+   {name:'信号源\n1k~100kHz',symbolSize:46,itemStyle:{color:'#ffb84d'}},
+   {name:'示波器 X-Y\n(网格8×8div)',symbolSize:52,itemStyle:{color:'#37d67a'}},
+   {name:'装置输入\n(要求5断开)',symbolSize:34,itemStyle:{color:'#ff6b6b'}},
+   {name:'K230 摄像头',symbolSize:50,itemStyle:{color:'#4ea1ff'}},
+   {name:'F407 控制板\n(按键/UI/DAC/AD9959)',symbolSize:52,itemStyle:{color:'#7c8cf8'}},
+  ],
+  links:[
+   {source:'信号源\n1k~100kHz',target:'示波器 X-Y\n(网格8×8div)'},
+   {source:'信号源\n1k~100kHz',target:'装置输入\n(要求5断开)'},
+   {source:'示波器 X-Y\n(网格8×8div)',target:'K230 摄像头'},
+   {source:'K230 摄像头',target:'F407 控制板\n(按键/UI/DAC/AD9959)',label:{show:true,formatter:'UART2 230400\n$START/$RAMP/$SET'}},
+   {source:'F407 控制板\n(按键/UI/DAC/AD9959)',target:'示波器 X-Y\n(网格8×8div)'},
+  ]
+ }]
+});
+window.addEventListener('resize',()=>D.resize());
+
+const S=echarts.init(document.getElementById('sm'),null,{renderer:'canvas'});
+S.setOption({
+ backgroundColor:'transparent',
+ tooltip:{},
+ series:[{
+  type:'graph', layout:'none', roam:false,
+  label:{show:true,fontSize:11.5,color:'#dbe4f0'},
+  lineStyle:{color:'#4ea1ff',width:1.6,opacity:.8,curveness:.2},
+  edgeSymbol:['none','arrow'],edgeSymbolSize:7,
+  data:[
+   {name:'WAIT_START',x:'6%',y:'10%',symbolSize:54,itemStyle:{color:'#202b40'}},
+   {name:'MEASURE_X\n(X幅度)',x:'22%',y:'10%',symbolSize:64,itemStyle:{color:'#1f3a5f'}},
+   {name:'RAMP_ESTIMATE\n(斜坡估频)',x:'42%',y:'10%',symbolSize:74,itemStyle:{color:'#2d5da8'}},
+   {name:'ROTATION_LOCK\n(旋转锁频)',x:'62%',y:'10%',symbolSize:66,itemStyle:{color:'#7c8cf8'}},
+   {name:'PHASE_FINE\n(相位90°/180°)',x:'80%',y:'10%',symbolSize:66,itemStyle:{color:'#a78bfa'}},
+   {name:'AMPLITUDE_FINE\n(幅度闭环)',x:'88%',y:'48%',symbolSize:66,itemStyle:{color:'#37d67a'}},
+   {name:'HOLD 5s\n(稳定≥5s)',x:'66%',y:'82%',symbolSize:72,itemStyle:{color:'#2fb265'}},
+   {name:'DONE\n($LOCKED/$DONE)',x:'42%',y:'82%',symbolSize:70,itemStyle:{color:'#37d67a'}},
+   {name:'FAILED\n($FAILED)',x:'14%',y:'78%',symbolSize:62,itemStyle:{color:'#ff6b6b'}},
+  ],
+  links:[
+   {source:'WAIT_START',target:'MEASURE_X\n(X幅度)',label:{show:true,formatter:'$START',fontSize:10,color:'#8aa0bc'}},
+   {source:'MEASURE_X\n(X幅度)',target:'RAMP_ESTIMATE\n(斜坡估频)',label:{show:true,formatter:'必发$RAMP',fontSize:10,color:'#8aa0bc'}},
+   {source:'RAMP_ESTIMATE\n(斜坡估频)',target:'ROTATION_LOCK\n(旋转锁频)',label:{show:true,formatter:'估频→精确$SET',fontSize:10,color:'#8aa0bc'}},
+   {source:'ROTATION_LOCK\n(旋转锁频)',target:'PHASE_FINE\n(相位90°/180°)',fontSize:10},
+   {source:'PHASE_FINE\n(相位90°/180°)',target:'AMPLITUDE_FINE\n(幅度闭环)'},
+   {source:'AMPLITUDE_FINE\n(幅度闭环)',target:'HOLD 5s\n(稳定≥5s)',label:{show:true,formatter:'$LOCKED',fontSize:10,color:'#8aa0bc'}},
+   {source:'HOLD 5s\n(稳定≥5s)',target:'DONE\n($LOCKED/$DONE)',label:{show:true,formatter:'$DONE',fontSize:10,color:'#8aa0bc'}},
+   {source:'RAMP_ESTIMATE\n(斜坡估频)',target:'FAILED\n($FAILED)',lineStyle:{color:'#ff6b6b',width:2,curveness:.3},label:{show:true,formatter:'无轨迹/越界×3/F407拒/超时',fontSize:10,color:'#ff6b6b'}},
+   {source:'MEASURE_X\n(X幅度)',target:'FAILED\n($FAILED)',lineStyle:{color:'#ff6b6b',width:1.5,curveness:.35},label:{show:true,formatter:'RAMP禁用/无X轨迹',fontSize:10,color:'#ff6b6b'}},
+   {source:'ROTATION_LOCK\n(旋转锁频)',target:'FAILED\n($FAILED)',lineStyle:{color:'#ff6b6b',width:1.4,curveness:.4},label:{show:true,formatter:'10s超时/ACK超时',fontSize:10,color:'#ff6b6b'}},
+  ]
+ }]
+});
+window.addEventListener('resize',()=>S.resize());
+
+const P=echarts.init(document.getElementById('pipe'),null,{renderer:'canvas'});
+P.setOption({
+ backgroundColor:'transparent',
+ tooltip:{trigger:'axis',axisPointer:{type:'shadow'}},
+ legend:{textStyle:{color:'#8aa0bc'},top:0},
+ grid:{left:110,right:30,top:40,bottom:10},
+ xAxis:{type:'value',axisLabel:{color:'#8aa0bc'}},
+ yAxis:{type:'category',data:['DONE/FAILED','$DONE 上报','HOLD 5s 稳定','幅度闭环','相位微调','旋转锁频','RAMP 估频','MEASURE_X','YOLO 网格锁定','摄像头采集'],axisLabel:{color:'#dbe4f0'}},
+ series:[
+  {name:'阶段耗时(ms)',type:'bar',stack:'t',barWidth:16,itemStyle:{color:'#4ea1ff'},
+   data:[5,5,100,400,1500,800,350,500,300,15]},
+  {name:'说明',type:'bar',stack:'t',tooltip:{show:false},silent:true,itemStyle:{color:'transparent'},data:[]}
+ ]
+});
+window.addEventListener('resize',()=>P.resize());
+
+const T=echarts.init(document.getElementById('timeline'),null,{renderer:'canvas'});
+const steps=[
+ {name:'YOLO锁网格',ms:300,color:'#4ea1ff'},
+ {name:'MEASURE_X 幅度',ms:500,color:'#4ea1ff'},
+ {name:'RAMP 估频×3帧',ms:150,color:'#2d5da8'},
+ {name:'$SET 精确输出',ms:200,color:'#7c8cf8'},
+ {name:'ROTATION_LOCK 锁频',ms:800,color:'#7c8cf8'},
+ {name:'PHASE_FINE 相位',ms:1500,color:'#a78bfa'},
+ {name:'AMPLITUDE_FINE 幅度',ms:400,color:'#37d67a'},
+ {name:'HOLD 稳定≥5s',ms:5000,color:'#2fb265'},
+ {name:'$DONE',ms:50,color:'#37d67a'},
+];
+const end=10000;
+T.setOption({
+ backgroundColor:'transparent',
+ tooltip:{formatter:p=>`${p.data.name}<br/>${p.data.ms} ms`},
+ grid:{left:70,right:30,top:10,bottom:10},
+ xAxis:{type:'value',max:end,axisLabel:{color:'#8aa0bc',formatter:v=>v/1000+'s'}},
+ yAxis:{type:'category',show:false},
+ series:[{
+  type:'custom', renderItem:(params,api)=>{
+   const s=api.value(2),e=api.value(3);
+   const x=api.coord([s,0]),xw=api.coord([e,0])[0]-x[0];
+   return {type:'rect',shape:{x:x[0],y:api.coord([0,0.4])[1],width:Math.max(1,xw),height:api.coord([0,-0.8])[1]-api.coord([0,0.4])[1]},style:{fill:api.value(4),opacity:.85}};
+  },
+  encode:{x:[0,1]},
+  data:steps.map((st,i)=>({name:st.name,ms:st.ms,value:[i,0,steps.slice(0,i).reduce((a,b)=>a+b.ms,0),steps.slice(0,i+1).reduce((a,b)=>a+b.ms,0),st.color]}))
+ }]
+});
+window.addEventListener('resize',()=>T.resize());
+</script>
+</body>
+</html>

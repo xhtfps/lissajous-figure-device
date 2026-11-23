@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>全盲1kHz网格扫频 vs 固定周期短斜坡测频 · 方法对比</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<style>
+  :root{ --bg:#0e1420; --card:#151d2e; --line:#26314a; --txt:#dbe4f3; --sub:#8fa1c4;
+         --blue:#3b82f6; --cyan:#22d3ee; --red:#f87171; --green:#34d399; }
+  *{ margin:0; padding:0; box-sizing:border-box; }
+  body{ background:var(--bg); color:var(--txt); font-family:"Microsoft YaHei","Segoe UI",sans-serif; padding:20px; }
+  h1{ font-size:20px; font-weight:600; margin-bottom:4px; }
+  .sub{ color:var(--sub); font-size:13px; margin-bottom:16px; }
+  .grid{ display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  .card{ background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; }
+  .card h2{ font-size:14px; font-weight:600; margin-bottom:10px; color:var(--cyan); }
+  .card.wide{ grid-column:1 / -1; }
+  #radar{ height:360px; }
+  #timeline{ height:300px; }
+  .kpis{ display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:16px; }
+  .kpi{ background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px; }
+  .kpi .v{ font-size:22px; font-weight:700; }
+  .kpi .l{ font-size:12px; color:var(--sub); margin-top:4px; }
+  .kpi .a{ color:var(--blue); } .kpi .b{ color:var(--cyan); }
+  .legend{ font-size:12px; color:var(--sub); margin-bottom:8px; }
+  .legend span{ margin-right:14px; }
+  .dot{ display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:4px; vertical-align:middle; }
+  .dA{ background:var(--blue); } .dB{ background:var(--cyan); }
+  .foot{ margin-top:14px; font-size:12px; color:var(--sub); line-height:1.7; }
+  @media (max-width:900px){ .grid{ grid-template-columns:1fr; } .kpis{ grid-template-columns:repeat(2,1fr); } }
+</style>
+</head>
+<body>
+  <h1>方法对比：A 全盲 1kHz 网格粗扫（现状 v2） vs B 固定周期短斜坡测频（新方案）</h1>
+  <div class="sub">电赛 2026 F题 要求5 · 纯摄像头测频 · 控制 ≤10s · 稳定保持 ≥5s</div>
+
+  <div class="kpis">
+    <div class="kpi"><div class="v a">~10%</div><div class="l">A 命中 100Hz 档的概率<br>（fill 谷窗口 ±~25Hz / 1kHz 网格）</div></div>
+    <div class="kpi"><div class="v b">确定性</div><div class="l">B 斜坡锚点 ±1~2% + 25 档细扫<br>真值必在网格上 → 必中</div></div>
+    <div class="kpi"><div class="v a">~9.0s</div><div class="l">A 理论全程（粗扫 6.7s 起）<br>10s 预算几乎无余量，实际常超</div></div>
+    <div class="kpi"><div class="v b">~4.2s</div><div class="l">B 全程（斜坡 0.6s + 细扫 1.3s）<br>余量 5.8s，可容纳失败重试</div></div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>五维能力雷达（0~100，越高越好）</h2>
+      <div id="radar"></div>
+    </div>
+    <div class="card">
+      <h2>10s 预算内的阶段耗时（堆叠）</h2>
+      <div id="timeline"></div>
+    </div>
+    <div class="card wide">
+      <h2>逐维度对比</h2>
+      <div style="overflow-x:auto;">
+      <table style="width:100%; border-collapse:collapse; font-size:13px;">
+        <thead>
+          <tr style="color:var(--sub); text-align:left;">
+            <th style="padding:6px 8px; border-bottom:1px solid var(--line);">维度</th>
+            <th style="padding:6px 8px; border-bottom:1px solid var(--line);">A 全盲 1kHz 网格</th>
+            <th style="padding:6px 8px; border-bottom:1px solid var(--line);">B 固定周期短斜坡</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:6px 8px; border-bottom:1px solid var(--line); color:var(--sub);">核心机制</td>
+              <td style="padding:6px 8px; border-bottom:1px solid var(--line);">DDS 1kHz 步进全频段扫，fill 低谷=接近整数频率比，逐个形状确认</td>
+              <td style="padding:6px 8px; border-bottom:1px solid var(--line);">Y 出已知周期锯齿斜坡，X 正弦沿 Y 展开，行质心+DFT+正弦拟合得 fx=N/T</td></tr>
+          <tr><td style="padding:6px 8px; border-bottom:1px solid var(--line); color:var(--sub);">频率锚点</td>
+              <td style="padding:6px 8px; border-bottom:1px solid var(--line); color:var(--red);">无——盲扫，靠"恰好在 1kHz 倍点附近"</td>
+              <td style="padding:6px 8px; border-bottom:1px solid var(--line); color:var(--green);">有——斜坡估计 ±1~2%，10ms 重复与 100Hz 网格相位对齐</td></tr>
+          <tr><td style="padding:6px 8px; border-bottom:1px solid var(--line); color:var(--sub);">100Hz 档命中</td>
+              <td style="padding:6px 8px; border-bottom:1px solid var(--line); color:var(--red);">~10%（fill 谷只在残差≲25Hz 时出现；12.3kHz→12kHz 残差 300Hz→无谷漏检）</td>
+              <td style="padding:6px 8px; border-bottom:1px solid var(--line); color:var(--green);">确定性（锚点±1.2kHz 内细扫 25 档，真值必在 100Hz 网格上）</td></tr>
+          <tr><td style="padding:6px 8px; border-bottom:1px solid var(--line); color:var(--sub);">粗测频耗时</td>
+              <td style="padding:6px 8px; border-bottom:1px solid var(--line); color:var(--red);">200 档 ×~33ms ≈ 6.7s，逼近 10s 预算</td>
+              <td style="padding:6px 8px; border-bottom:1px solid var(--line); color:var(--green);">2 拍 ≈ 0.6s（1ms + 0.5ms 斜坡自适应）</td></tr>
+          <tr><td style="padding:6px 8px; border-bottom:1px solid var(--line); color:var(--sub);">覆盖 1k~100kHz</td>
+              <td style="padding:6px 8px; border-bottom:1px solid var(--line);">200 档全覆盖，但命中率低</td>
+              <td style="padding:6px 8px; border-bottom:1px solid var(--line);">全频段，2:1 目标乘 2</td></tr>
+          <tr><td style="padding:6px 8px; border-bottom:1px solid var(--line); color:var(--sub);">硬件依赖</td>
+              <td style="padding:6px 8px; border-bottom:1px solid var(--line); color:var(--green);">无新增（AD9959 现有 Y 链路）</td>
+              <td style="padding:6px 8px; border-bottom:1px solid var(--line); color:var(--red);">需 F407 DAC PA4 接示波器 Y（未确认）；未接→回退 A 白耗 ~0.5s</td></tr>
+          <tr><td style="padding:6px 8px; border-bottom:1px solid var(--line); color:var(--sub);">实现状态</td>
+              <td style="padding:6px 8px; border-bottom:1px solid var(--line); color:var(--green);">已实现，冒烟测试通过，有回退链</td>
+              <td style="padding:6px 8px; border-bottom:1px solid var(--line); color:var(--red);">需新 $RAMP 协议 + RAMP_ESTIMATE 状态 + 纯 Python 拟合（MicroPython 性能待测）</td></tr>
+          <tr><td style="padding:6px 8px; border-bottom:1px solid var(--line); color:var(--sub);">外部证据</td>
+              <td style="padding:6px 8px; border-bottom:1px solid var(--line); color:var(--red);">无同源公开实现（CdyWork V1 用 FPGA ADC 测频，非视觉扫频）</td>
+              <td style="padding:6px 8px; border-bottom:1px solid var(--line); color:var(--green);">CdyWork 89★ 同源实现 + 991 点仿真 100% 档命中 + IIETA 翻转周期论文闭环</td></tr>
+          <tr><td style="padding:6px 8px; color:var(--sub);">真机验证</td>
+              <td style="padding:6px 8px; color:var(--red);">未验证（冒烟=模拟测量数据，非摄像头/示波器实测）</td>
+              <td style="padding:6px 8px; color:var(--red);">未验证（余辉/摩尔纹/DAC 建立时间需台架实验）</td></tr>
+        </tbody>
+      </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">
+    结论：A 是"碰运气 + 时间必超"的兜底链路；B 是"有锚点的确定性收敛 + 时间充裕"的正解，但前置条件（PA4→Y 接线）与真机验证未满足。<br>
+    建议路线：不是二选一，而是 <b style="color:var(--green);">B 为主、A 为回退</b>（RAMP 失败自动回退 A）——当务之急是台架实验第 1 步：菜单 6 发 1kHz 锯齿，确认 PA4 能否驱动示波器 Y。
+  </div>
+
+<script>
+const A='#3b82f6', B='#22d3ee';
+// 雷达
+const radar = echarts.init(document.getElementById('radar'));
+radar.setOption({
+  backgroundColor:'transparent',
+  tooltip:{},
+  legend:{ data:['A 全盲1kHz网格','B 固定周期短斜坡'], textStyle:{color:'#dbe4f3'}, bottom:0 },
+  radar:{
+    indicator:[
+      {name:'100Hz档命中确定性', max:100},
+      {name:'10s预算时间余量', max:100},
+      {name:'硬件就绪度', max:100},
+      {name:'实现成熟度', max:100},
+      {name:'外部证据强度', max:100},
+    ],
+    radius:'62%', center:['50%','50%'],
+    axisName:{ color:'#8fa1c4' },
+    splitLine:{ lineStyle:{ color:'#26314a' } },
+    splitArea:{ areaStyle:{ color:['rgba(38,49,74,0.25)','rgba(21,29,46,0.25)'] } },
+    axisLine:{ lineStyle:{ color:'#26314a' } },
+  },
+  series:[{
+    type:'radar',
+    data:[
+      { name:'A 全盲1kHz网格', value:[10,5,100,85,40], itemStyle:{color:A}, areaStyle:{opacity:0.18} },
+      { name:'B 固定周期短斜坡', value:[95,90,30,35,75], itemStyle:{color:B}, areaStyle:{opacity:0.18} },
+    ],
+  }],
+});
+// 时间线堆叠
+const tl = echarts.init(document.getElementById('timeline'));
+const phaseA = ['粗扫 200档','候选确认','旋转锁频','相位微调','幅度闭环'];
+const dataA = [6.7,0.4,0.7,0.9,0.3];
+const phaseB = ['测量X','斜坡2拍','局部细扫25档','旋转锁频','相位微调','幅度闭环'];
+const dataB = [0.4,0.6,1.3,0.7,0.9,0.3];
+tl.setOption({
+  backgroundColor:'transparent',
+  grid:{ left:90, right:70, top:20, bottom:30 },
+  tooltip:{
+    trigger:'axis', axisPointer:{ type:'shadow' },
+    formatter:function(ps){ let s=ps[0].axisValueLabel+'<br>'; let t=0;
+      ps.forEach(p=>{ s+=p.marker+p.seriesName+'：'+p.value.toFixed(1)+'s<br>'; t+=p.value; });
+      s+='<b>合计 '+t.toFixed(1)+'s</b>'; return s; }
+  },
+  legend:{ data:['方法A','方法B'], textStyle:{color:'#dbe4f3'}, bottom:0 },
+  xAxis:{ type:'value', max:10, axisLabel:{color:'#8fa1c4', formatter:'{value}s'}, splitLine:{lineStyle:{color:'#1e2a44'}} },
+  yAxis:{ type:'category', inverse:true,
+    data:['方法A（命中率~10%，常超时）','方法B（确定性命中）'],
+    axisLabel:{ color:'#dbe4f3', fontSize:12 } },
+  series:[
+    { name:'粗扫/斜坡', type:'bar', stack:'A', data:[[0,6.7],[0,0.6]], barWidth:26,
+      itemStyle:{color:'#3b82f6', borderRadius:[0,0,0,0]} },
+    { name:'细扫/确认', type:'bar', stack:'A', data:[[0,0.4],[0,1.3]],
+      itemStyle:{color:'#22d3ee'} },
+    { name:'锁频', type:'bar', stack:'A', data:[[0,0.7],[0,0.7]],
+      itemStyle:{color:'#34d399'} },
+    { name:'相位', type:'bar', stack:'A', data:[[0,0.9],[0,0.9]],
+      itemStyle:{color:'#a78bfa'} },
+    { name:'幅度', type:'bar', stack:'A', data:[[0,0.3],[0,0.3]],
+      itemStyle:{color:'#fbbf24', borderRadius:[0,0,0,0]} },
+  ],
+});
+// 10s 红线标记
+tl.setOption({ graphic:[{
+  type:'line', shape:{x1:0,y1:0,x2:0,y2:230}, style:{stroke:'#f87171',lineWidth:2,lineDash:[6,4]},
+  position:['53.8%','8%'],
+}, {
+  type:'text', style:{text:'10s 预算线', fill:'#f87171', fontSize:12, fontWeight:600}, position:['56%','5%'],
+}]});
+window.addEventListener('resize', ()=>{ radar.resize(); tl.resize(); });
+</script>
+</body>
+</html>

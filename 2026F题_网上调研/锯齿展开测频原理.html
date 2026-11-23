@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>锯齿展开测频原理</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+:root{--bg:#0f1420;--panel:#1a2233;--line:#2c3a52;--txt:#dbe4f0;--dim:#8aa0bc;--acc:#4ea1ff;--ok:#37d67a;--warn:#ffb84d}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--txt);font-family:"Microsoft YaHei",Segoe UI,sans-serif;line-height:1.7;padding:28px 24px}
+h1{font-size:23px;margin-bottom:4px}
+h2{font-size:17px;margin:24px 0 10px;padding-left:10px;border-left:4px solid var(--acc)}
+h3{font-size:14.5px;margin:14px 0 6px;color:var(--acc)}
+p{color:var(--dim);font-size:14px;margin-bottom:10px}
+.sub{color:var(--dim);font-size:13px;margin-bottom:20px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin-bottom:16px}
+code{background:#202b40;padding:1px 6px;border-radius:4px;font-size:12.5px;color:#9ecbff}
+.formula{background:#202b40;border-left:3px solid var(--acc);padding:10px 14px;margin:8px 0;border-radius:0 6px 6px 0;font-size:14px;color:#cfe3ff;white-space:pre-wrap;font-family:"Consolas","Microsoft YaHei",monospace}
+.badge{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;font-weight:600}
+.b-ok{background:rgba(55,214,122,.15);color:var(--ok)}
+.b-warn{background:rgba(255,184,77,.15);color:var(--warn)}
+.chart{width:100%;height:330px}
+table{width:100%;border-collapse:collapse;font-size:13px;margin-top:6px}
+th{background:#202b40;color:var(--acc);padding:7px;text-align:left;border-bottom:2px solid var(--line)}
+td{padding:6px 8px;border-bottom:1px solid var(--line)}
+ul{margin:6px 0 6px 18px;color:var(--dim);font-size:13.5px}
+li{margin-bottom:6px}
+li b{color:var(--txt)}
+</style>
+</head>
+<body>
+
+<h1>锯齿展开测频：一条链路的完整原理</h1>
+<p class="sub">为什么 K230 发 $RAMP → F407 出锯齿 → 屏幕把正弦"拉直" → 一帧数周期就能测出频率</p>
+
+<div class="panel">
+<h3>一句话本质</h3>
+<p>示波器的 X-Y 模式是一个<b>二维绘图机</b>：X 轴接输入正弦，Y 轴接锯齿斜坡。斜坡电压随时间匀速爬升，屏幕上的光点就沿着 Y 方向匀速移动——<b>相当于把"时间"画成了屏幕上的 Y 坐标</b>。于是输入正弦在屏幕上被展开成一条波形，你只需要数这条波形在屏幕上出现了几个周期，就知道频率。</p>
+<p>通俗类比：把正弦波放在<b>传送带</b>上匀速拉过（传送带速度 = 锯齿斜率），对着传送带拍一张照片，数照片里有几个完整的波峰。一帧照片 = 一个斜坡周期，数出来的周期数 N 直接换算频率。</p>
+</div>
+
+<div class="panel">
+<h3>第 0 步：为什么 X-Y 模式下正常显示的是李萨如图</h3>
+<div id="xy" class="chart"></div>
+<p class="caption">正常模式：X=sin(fx·t)、Y=sin(fy·t+φ)。当 fy/fx = 1:1 → 椭圆/圆；fy/fx=2:1 → ∞ 形。图形形状编码了频率比与相位差。</p>
+</div>
+
+<div class="panel">
+<h3>第 1 步：换 Y 源 —— 锯齿把时间轴"画"到屏幕上</h3>
+<div id="ramp" class="chart"></div>
+<p>锯齿斜坡 <code>V_ramp(t) = A·(t mod T_ramp)/T_ramp</code>，周期 T_ramp = 1ms（1kHz）。</p>
+<p>把 Y 轴从正弦换成锯齿后，屏幕上每个 Y 高度都对应一个确定的<b>斜坡相位 u = (t mod T_ramp)/T_ramp ∈ [0,1)</b>——也就是一个确定的时刻。屏幕由"X-Y 李萨如图"变成"把时间轴按 Y 方向展开的波形图"。</p>
+</div>
+
+<div class="panel">
+<h3>第 2 步：核心公式 N = fx × T_ramp</h3>
+<div class="formula">X 通道输入： x(t) = A·sin(2π·fx·t)
+斜坡相位：   u   = (t mod T_ramp) / T_ramp
+
+把 t 换成 u：t = u·T_ramp（忽略模余，整周期对齐）
+
+x(u) = A·sin(2π·fx·T_ramp·u) = A·sin(2π·N·u)
+其中  N = fx·T_ramp   ← 斜坡一个周期内的输入正弦周期数</div>
+<table>
+<tr><th>fx</th><th>T_ramp=1ms 时 N</th><th>屏幕上看到的</th></tr>
+<tr><td>1 kHz</td><td>1.0</td><td>1 个完整正弦周期</td></tr>
+<tr><td>10 kHz</td><td>10</td><td>10 个周期</td></tr>
+<tr><td>50 kHz</td><td>50</td><td>50 个周期</td></tr>
+<tr><td>100 kHz</td><td>100</td><td>100 个周期（超出可接受上限→换更快斜坡）</td></tr>
+</table>
+<p>所以：<b>测出屏幕上波形有几个周期 N，就测出了频率 fx = N / T_ramp = N × 1000 Hz</b>。整条链路的终点就是一个"数周期"问题。</p>
+</div>
+
+<div class="panel">
+<h3>第 3 步：图像侧怎么数周期（三步）</h3>
+<div class="chart" id="est"></div>
+<ul>
+<li><b>① 行质心</b>：对每个屏幕行（= 一个斜坡相位 u），把该行所有黄色轨迹像素求 X 均值 → 得到约 80~380 个离散采样点 (u_i, x_i)。轨迹是细线，每行就一个点，质心即采样。</li>
+<li><b>② 整数周期 DFT 粗估</b>：对 k=1..60 扫离散正弦相关功率 <code>P(k)=(Σx·cos(2πk u))²+(Σx·sin(2πk u))²</code>，功率最大的整数 k = 周期数粗估（MicroPython 无 numpy FFT，纯 Python 内积，毫秒级）。</li>
+<li><b>③ 最小二乘细化</b>：在粗估 ±1 周期内用黄金分割扫 N，每次拟合 4 元模型 <code>x̂ = a·sin(2πNu) + b·cos(2πNu) + c + d·u</code>（sin/cos 吸收幅度与相位，直流项吸收偏移，线性项吸收斜坡非线性/亮度漂移），取残差最小的小数 N。输出质量 <code>quality = 1 − rms/半摆幅</code>。</li>
+</ul>
+</div>
+
+<div class="panel">
+<h3>第 4 步：误差与 100Hz 网格的关系（风险所在）</h3>
+<table>
+<tr><th>量</th><th>值</th><th>说明</th></tr>
+<tr><td>频率分辨率</td><td>fx = N × 1000 Hz</td><td>N 每差 0.01，fx 差 10 Hz</td></tr>
+<tr><td>归整网格</td><td>round(fx/100)×100</td><td>题目频率步进 100Hz</td></tr>
+<tr><td>网格容差</td><td>±50 Hz</td><td>估计偏差必须 &lt; 0.05 周期</td></tr>
+<tr><td>合成数据实测</td><td>N=12.3 → 估 12.300</td><td>质量 0.995，数学上远优于 0.05 周期</td></tr>
+<tr><td>实机风险</td><td>余辉/摩尔纹/DAC建立</td><td><span class="badge b-warn">待台架全频段验证</span></td></tr>
+</table>
+<p>若实机估频命中率不足，代码已保留 <code>RAMP_LOCAL_SWEEP_RANGE_GRID=12</code> 常量——估频后在其邻域 ±1.2kHz 细扫确认，可兜住 0.05 周期以上的残余误差。</p>
+</div>
+
+<div class="panel">
+<h3>为什么必须用 100Hz 整数倍周期</h3>
+<p>题目频率步进 100Hz → 任意 fx 都是 100Hz 的整数倍。T_ramp 取 1ms（=10 个 100Hz 周期）后，<b>每个斜坡起点，输入正弦恰好回到同一相位</b>。示波器余晖把多帧轨迹叠加时不糊（所有帧波形重合），与 CdyWork/2026F-lissajous-controller 作者"10ms 斜坡=100Hz 整数倍"同源结论一致。若 T 不是 100Hz 整数倍，叠加会产生移动重影。</p>
+</div>
+
+<div class="panel">
+<h3>整条链路时序（谁先谁后）</h3>
+<table>
+<tr><th>顺序</th><th>动作</th><th>耗时</th></tr>
+<tr><td>1</td><td>K230 发 <code>$RAMP,seq,probe,1000,3300</code></td><td>&lt;1ms</td></tr>
+<tr><td>2</td><td>F407 停 AD9959 → <code>BSP_DAC_StartWaveform(3.3,1000,50,SAWTOOTH)</code>，答 <code>$APPLIED</code></td><td>~几 ms</td></tr>
+<tr><td>3</td><td>PA4 出 1kHz 锯齿 → 屏幕出现展开波形</td><td>示波器刷新 ~几十 ms</td></tr>
+<tr><td>4</td><td>K230 采 3 帧斜坡展开图 → 行质心+DFT+LSQ → N → fx → 归整网格</td><td>3×33ms ≈ 100ms</td></tr>
+<tr><td>5</td><td>K230 发精确 <code>$SET</code> → F407 停 DAC 切回 AD9959 出正弦 → 图形固定</td><td>几 ms</td></tr>
+</table>
+</div>
+
+<script>
+function mk(id){
+ const c=echarts.init(document.getElementById(id),null,{renderer:'canvas'});
+ c.setOption({
+  backgroundColor:'transparent',
+  animation:true,
+  tooltip:{trigger:'axis'},
+  legend:{textStyle:{color:'#8aa0bc'},top:2},
+  grid:{left:46,right:20,top:32,bottom:28},
+  xAxis:{type:'value',min:0,max:1,axisLabel:{color:'#8aa0bc'},name:'斜坡相位 u（=时间）',nameTextStyle:{color:'#8aa0bc'}},
+  yAxis:{type:'value',min:-1.4,max:1.4,axisLabel:{color:'#8aa0bc'},name:'X 通道 / 屏幕 Y',nameTextStyle:{color:'#8aa0bc'}},
+ });
+ return c;
+}
+const xy=mk('xy');
+xy.setOption({series:[
+ {name:'X=sin(2πt)（1周期）',type:'line',showSymbol:false,data:[...Array(201)].map((_,i)=>{const u=i/200;return [u,Math.sin(2*Math.PI*u)]}),lineStyle:{color:'#4ea1ff',width:2}},
+ {name:'Y=sin(2πt+90°) → 1:1 圆',type:'line',showSymbol:false,data:[...Array(201)].map((_,i)=>{const u=i/200;return [u,Math.sin(2*Math.PI*u+Math.PI/2)]}),lineStyle:{color:'#37d67a',width:2}},
+]});
+
+const ramp=mk('ramp');
+ramp.setOption({series:[
+ {name:'X（输入正弦，N=3）',type:'line',showSymbol:false,data:[...Array(301)].map((_,i)=>{const u=i/300;return [u,Math.sin(2*Math.PI*3*u)]}),lineStyle:{color:'#4ea1ff',width:2.2}},
+ {name:'Y（锯齿斜坡 1 周期）',type:'line',showSymbol:false,data:[[0,-1.35],[1,1.35]],lineStyle:{color:'#ffb84d',width:2,type:'dashed'}},
+]});
+ramp.setOption({title:{text:'屏幕效果：X 波形被 Y 斜坡沿时间轴展开',left:'center',top:'78%',textStyle:{color:'#8aa0bc',fontSize:12}}});
+
+const est=mk('est');
+const n_true=12.3;
+const noise=0.06;
+const pts=[];
+const rh=200;
+for(let y=0;y<rh;y+=2){
+ const u=y/rh;
+ pts.push([u,Math.sin(2*Math.PI*n_true*u)+(Math.random()-0.5)*noise]);
+}
+est.setOption({title:{text:'合成斜坡展开轨迹（N=12.3，加噪声）→ DFT 粗估 12 → LSQ 细化 12.30',left:'center',top:'72%',textStyle:{color:'#8aa0bc',fontSize:12}},series:[
+ {name:'行质心采样',type:'scatter',symbolSize:4,data:pts,itemStyle:{color:'#4ea1ff',opacity:.75}},
+ {name:'LSQ 拟合曲线',type:'line',showSymbol:false,data:[...Array(201)].map((_,i)=>{const u=i/200;return [u,Math.sin(2*Math.PI*12.30*u)]}),lineStyle:{color:'#37d67a',width:2.2}},
+]});
+window.addEventListener('resize',()=>{xy.resize();ramp.resize();est.resize();});
+</script>
+</body>
+</html>
