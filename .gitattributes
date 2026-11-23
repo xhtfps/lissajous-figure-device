@@ -1,0 +1,11 @@
+* text=auto eol=lf
+
+*.pdf  binary
+*.zip  binary
+*.png  binary
+*.jpg  binary
+*.bmp  binary
+*.hex  binary
+*.bin  binary
+*.lib  binary
+*.a    binary
